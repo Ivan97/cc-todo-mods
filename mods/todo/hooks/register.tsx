@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { Register } from 'claude-code'
+import type { EngineInterface, Register } from 'claude-code'
 
 import type { Importance, Todo, TodoForm } from '../types'
 
@@ -23,6 +23,8 @@ const hideDone = atom({ plugin: 'todo', key: 'hideDone' } as const, false)
 const detailId = atom({ plugin: 'todo', key: 'detailId' } as const, null)
 const applied = atom({ plugin: 'todo', key: 'applied' } as const, null)
 const ask = atom({ plugin: 'todo', key: 'ask' } as const, null)
+/** 本 session 是否已从 $.store 恢复过 todos（atom 未写入时读初始值，永非 undefined，须靠哨兵判断） */
+const hydrated = atom({ plugin: 'todo', key: 'hydrated' } as const, false)
 
 // ---------- importance ----------
 const IMPORTANCES: readonly Importance[] = ['urgent-important', 'important', 'general']
@@ -142,6 +144,35 @@ function truncate(text: string, max: number): string {
   return chars.length <= max ? text : `${chars.slice(0, max).join('')}…`
 }
 
+/** hydrateTodos 的最小依赖集，便于单测 */
+export type HydrateDeps = {
+  wasHydrated(): Promise<boolean>
+  markHydrated(): Promise<void>
+  readStoredTodos(): Promise<unknown>
+  writeTodos(list: Todo[]): Promise<void>
+}
+
+/**
+ * 每个 session 从 $.store 恢复一次 todos。
+ * 两个前提：atom 未写入时读到的是初始值（永非 undefined），不能靠值判断；
+ * /clear 后进程续用新 session id 且不再触发 session.start，恢复点须含渲染路径。
+ */
+export async function hydrateTodos(deps: HydrateDeps): Promise<void> {
+  if (await deps.wasHydrated()) return
+  const stored = await deps.readStoredTodos()
+  await deps.writeTodos(Array.isArray(stored) ? (stored as Todo[]) : [])
+  await deps.markHydrated()
+}
+
+/** 接线版：永不 reject，session.start 可 await，渲染路径可 fire-and-forget */
+const hydrate = ($: EngineInterface): Promise<void> =>
+  hydrateTodos({
+    wasHydrated: () => read($, hydrated),
+    markHydrated: () => $.state.set(hydrated, true),
+    readStoredTodos: () => $.store.get('todos'),
+    writeTodos: list => $.state.set(todos, list),
+  }).catch(() => {})
+
 // ---------- hooks ----------
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -149,11 +180,7 @@ export const register: Register = on => {
       name: 'todo',
       description: '待办看板：/todo 打开，/todo <标题> 快速添加',
     })
-    const existing = await read($, todos)
-    if (existing === undefined) {
-      const stored = await $.store.get('todos')
-      await $.state.set(todos, Array.isArray(stored) ? (stored as Todo[]) : [])
-    }
+    await hydrate($)
     return next(e)
   })
 
@@ -202,6 +229,7 @@ export const register: Register = on => {
 
   // ---------- 输入框上方摘要 band ----------
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    void hydrate($)
     const list = (await read($, todos)) ?? []
     const openItems = list.filter(t => !t.done)
     if (openItems.length === 0 || e.props.hasSurvey) return next(e)
@@ -233,6 +261,7 @@ export const register: Register = on => {
 
   // ---------- 侧边栏看板 ----------
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    void hydrate($)
     const { Box, Button, Input, Select, Text } = $.ui.resolve(e)
     const nowMs = await $.clock.now()
     const now = new Date(nowMs)

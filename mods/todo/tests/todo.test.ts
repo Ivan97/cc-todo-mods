@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { defaultDue, formatDue, parseDueInput, sortTodos } from '../hooks/register'
+import { defaultDue, formatDue, hydrateTodos, parseDueInput, sortTodos } from '../hooks/register'
 import type { Importance, Todo } from '../types'
 
 function makeTodo(id: string, importance: Importance, due: string, done = false): Todo {
@@ -66,5 +66,53 @@ describe('formatDue 展示格式', () => {
     expect(formatDue(new Date(2026, 9, 8, 14, 0).toISOString(), nowMs)).toBe('明天 14:00')
     expect(formatDue(new Date(2026, 9, 10, 9, 5).toISOString(), nowMs)).toBe('10-10 09:05')
     expect(formatDue(new Date(2027, 0, 2, 9, 0).toISOString(), nowMs)).toBe('2027-1-2 09:00')
+  })
+})
+
+describe('hydrateTodos 从 $.store 恢复', () => {
+  const stored: Todo[] = [makeTodo('a', 'general', '2026-10-08T12:00:00.000Z')]
+
+  function makeDeps(opts: { hydrated?: boolean; stored?: unknown } = {}) {
+    const state = { todos: [] as Todo[], hydrated: opts.hydrated ?? false }
+    const calls: string[] = []
+    return {
+      state,
+      calls,
+      deps: {
+        wasHydrated: async () => state.hydrated,
+        markHydrated: async () => {
+          calls.push('markHydrated')
+          state.hydrated = true
+        },
+        readStoredTodos: async () => {
+          calls.push('readStored')
+          return opts.stored ?? stored
+        },
+        writeTodos: async (list: Todo[]) => {
+          calls.push('writeTodos')
+          state.todos = list
+        },
+      },
+    }
+  }
+
+  test('未水合时从 store 读数组写入 todos', async () => {
+    const { deps, state } = makeDeps()
+    await hydrateTodos(deps)
+    expect(state.todos).toBe(stored)
+    expect(state.hydrated).toBe(true)
+  })
+
+  test('已水合时跳过（不读 store 不写 todos）', async () => {
+    const { deps, calls } = makeDeps({ hydrated: true })
+    await hydrateTodos(deps)
+    expect(calls).toEqual([])
+  })
+
+  test('store 值损坏（非数组）时写入空列表', async () => {
+    const { deps, state } = makeDeps({ stored: 'oops' })
+    await hydrateTodos(deps)
+    expect(state.todos).toEqual([])
+    expect(state.hydrated).toBe(true)
   })
 })

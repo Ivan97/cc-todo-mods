@@ -40,6 +40,8 @@ declare module 'claude-code' {
       applied: TodoApplied
       /** 提交后正在询问是否标记完成的待办 */
       ask: TodoApplied
+      /** 本 session 是否已从 $.store 恢复过 todos */
+      hydrated: boolean
     }
   }
 }
