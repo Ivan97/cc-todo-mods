@@ -1,0 +1,11 @@
+{
+  "name": "cc-todo-mods",
+  "owner": { "name": "ivan97" },
+  "plugins": [
+    {
+      "name": "todo",
+      "source": "./mods/todo",
+      "description": "待办看板：输入框上方常驻摘要 + 侧边栏增删改查，支持应用到输入框、提交后询问标记完成"
+    }
+  ]
+}
