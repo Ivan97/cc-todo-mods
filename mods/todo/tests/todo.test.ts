@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { defaultDue, formatDue, hydrateTodos, parseDueInput, sortTodos } from '../hooks/register'
 import type { Importance, Todo } from '../types'
@@ -115,4 +115,61 @@ describe('hydrateTodos 从 $.store 恢复', () => {
     expect(state.todos).toEqual([])
     expect(state.hydrated).toBe(true)
   })
+})
+
+describe('看板 UI：新增表单', () => {
+  for (const surface of ['terminal', 'desktop'] as const) {
+    test(`${surface}：列表按「新增」进入表单，填写后保存`, async ($, on) => {
+      mock.clock(on, { now: Date.UTC(2026, 9, 7, 12) })
+      mock.store(on)
+      on('ui.open', () => ({ value: { isPlaced: true } }))
+      const ui = await $.ui.mount({
+        plugin: 'todo',
+        surface,
+        component: 'Pane',
+        requestId: 'todo',
+        props: {},
+      })
+
+      expect(await ui.find({ key: 'list-new' })).toBeTruthy()
+
+      await ui.press({ key: 'list-new' })
+
+      expect(await ui.find({ key: 'form-title' })).toBeTruthy()
+
+      await ui.input({ key: 'form-title', text: '表单新增测试', kind: 'change' })
+      await ui.press({ key: 'form-save' })
+
+      expect(await ui.find({ text: '表单新增测试' })).toBeTruthy()
+    })
+  }
+})
+
+describe('看板 UI：从 $.store 恢复（/clear 后的路径）', () => {
+  const stored: Todo[] = [
+    { ...makeTodo('restore-1', 'urgent-important', '2026-10-08T02:00:00.000Z'), title: '恢复的待办' },
+  ]
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    test(`${surface}：classic.SessionStart(source='clear') 后列表显示已存待办`, async ($, on) => {
+      mock.clock(on, { now: Date.UTC(2026, 9, 7, 12) })
+      mock.store(on, { todos: stored })
+      on('ui.open', () => ({ value: { isPlaced: true } }))
+      on('classic.SessionStart', () => ({}))
+
+      // /clear 语义：classic.SessionStart 以 source='clear' 触发，水合在事件里完成
+      await $.classic.SessionStart({ source: 'clear' })
+
+      const ui = await $.ui.mount({
+        plugin: 'todo',
+        surface,
+        component: 'Pane',
+        requestId: 'todo',
+        props: {},
+      })
+
+      expect(await ui.find({ text: '恢复的待办' })).toBeTruthy()
+      expect(await ui.find({ key: 'open-restore-1' })).toBeTruthy()
+    })
+  }
 })

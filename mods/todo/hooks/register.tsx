@@ -7,24 +7,37 @@ const PANE = 'todo'
 const ASK = 'todo-ask'
 
 // ---------- state refs ----------
-const todos = atom({ plugin: 'todo', key: 'todos' } as const, [])
-const view = atom({ plugin: 'todo', key: 'view' } as const, 'list')
-const formMode = atom({ plugin: 'todo', key: 'formMode' } as const, 'new')
-const formTargetId = atom({ plugin: 'todo', key: 'formTargetId' } as const, null)
-const form = atom({ plugin: 'todo', key: 'form' } as const, {
+// $.state.set 只收本文件内的字面量 const 引用；atom 是 { ref, initial } 包装，只进 read/update
+const todosRef = { plugin: 'todo', key: 'todos' } as const
+const viewRef = { plugin: 'todo', key: 'view' } as const
+const formModeRef = { plugin: 'todo', key: 'formMode' } as const
+const formTargetIdRef = { plugin: 'todo', key: 'formTargetId' } as const
+const formRef = { plugin: 'todo', key: 'form' } as const
+const formErrorRef = { plugin: 'todo', key: 'formError' } as const
+const hideDoneRef = { plugin: 'todo', key: 'hideDone' } as const
+const detailIdRef = { plugin: 'todo', key: 'detailId' } as const
+const appliedRef = { plugin: 'todo', key: 'applied' } as const
+const askRef = { plugin: 'todo', key: 'ask' } as const
+const hydratedRef = { plugin: 'todo', key: 'hydrated' } as const
+
+const todos = atom(todosRef, [])
+const view = atom(viewRef, 'list')
+const formMode = atom(formModeRef, 'new')
+const formTargetId = atom(formTargetIdRef, null)
+const form = atom(formRef, {
   title: '',
   notes: '',
   due: '',
   tags: '',
   importance: 'general',
 } as TodoForm)
-const formError = atom({ plugin: 'todo', key: 'formError' } as const, null)
-const hideDone = atom({ plugin: 'todo', key: 'hideDone' } as const, false)
-const detailId = atom({ plugin: 'todo', key: 'detailId' } as const, null)
-const applied = atom({ plugin: 'todo', key: 'applied' } as const, null)
-const ask = atom({ plugin: 'todo', key: 'ask' } as const, null)
+const formError = atom(formErrorRef, null)
+const hideDone = atom(hideDoneRef, false)
+const detailId = atom(detailIdRef, null)
+const applied = atom(appliedRef, null)
+const ask = atom(askRef, null)
 /** 本 session 是否已从 $.store 恢复过 todos（atom 未写入时读初始值，永非 undefined，须靠哨兵判断） */
-const hydrated = atom({ plugin: 'todo', key: 'hydrated' } as const, false)
+const hydrated = atom(hydratedRef, false)
 
 // ---------- importance ----------
 const IMPORTANCES: readonly Importance[] = ['urgent-important', 'important', 'general']
@@ -168,9 +181,9 @@ export async function hydrateTodos(deps: HydrateDeps): Promise<void> {
 const hydrate = ($: EngineInterface): Promise<void> =>
   hydrateTodos({
     wasHydrated: () => read($, hydrated),
-    markHydrated: () => $.state.set(hydrated, true),
+    markHydrated: () => $.state.set(hydratedRef, true),
     readStoredTodos: () => $.store.get('todos'),
-    writeTodos: list => $.state.set(todos, list),
+    writeTodos: list => $.state.set(todosRef, list),
   }).catch(() => {})
 
 // ---------- hooks ----------
@@ -184,7 +197,15 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // /clear 后进程换新 session id、不再触发 session.start，但 classic.SessionStart
+  // 会以 source='clear' 触发；渲染期禁止写 state，恢复必须挂在事件上
+  on('classic.SessionStart', async ($, e, next) => {
+    await hydrate($)
+    return next(e)
+  })
+
   on('command.run', { command: 'todo' }, async ($, e) => {
+    await hydrate($)
     const args = e.args.trim()
     if (args !== '') {
       const now = new Date(await $.clock.now())
@@ -212,9 +233,9 @@ export const register: Register = on => {
     const entered = await next(e)
     const appliedTodo = await read($, applied)
     if (appliedTodo != null) {
-      await $.state.set(applied, null)
+      await $.state.set(appliedRef, null)
       if (e.text.includes(appliedTodo.title)) {
-        await $.state.set(ask, appliedTodo)
+        await $.state.set(askRef, appliedTodo)
         void $.ui.open({ id: ASK, title: '待办完成确认', focus: true, closeOnEscape: true, rows: 5 })
       }
     }
@@ -223,13 +244,12 @@ export const register: Register = on => {
 
   // Esc 关闭确认框时清掉询问状态
   on('ui.close', { id: ASK }, async ($, e, next) => {
-    await $.state.set(ask, null)
+    await $.state.set(askRef, null)
     return next(e)
   })
 
   // ---------- 输入框上方摘要 band ----------
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    void hydrate($)
     const list = (await read($, todos)) ?? []
     const openItems = list.filter(t => !t.done)
     if (openItems.length === 0 || e.props.hasSurvey) return next(e)
@@ -261,7 +281,6 @@ export const register: Register = on => {
 
   // ---------- 侧边栏看板 ----------
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    void hydrate($)
     const { Box, Button, Input, Select, Text } = $.ui.resolve(e)
     const nowMs = await $.clock.now()
     const now = new Date(nowMs)
@@ -279,34 +298,34 @@ export const register: Register = on => {
     // ----- actions -----
     const openFocused = () => void $.ui.open({ id: PANE, title: '待办', focus: true })
     const goList = async () => {
-      await $.state.set(view, 'list')
+      await $.state.set(viewRef, 'list')
     }
     const openDetail = async (id: string) => {
-      await $.state.set(detailId, id)
-      await $.state.set(view, 'detail')
+      await $.state.set(detailIdRef, id)
+      await $.state.set(viewRef, 'detail')
     }
     const startNew = async () => {
-      await $.state.set(form, blankForm())
-      await $.state.set(formMode, 'new')
-      await $.state.set(formTargetId, null)
-      await $.state.set(formError, null)
-      await $.state.set(view, 'form')
+      await $.state.set(formRef, blankForm())
+      await $.state.set(formModeRef, 'new')
+      await $.state.set(formTargetIdRef, null)
+      await $.state.set(formErrorRef, null)
+      await $.state.set(viewRef, 'form')
       openFocused()
     }
     const startEdit = async (id: string) => {
       const t = list.find(x => x.id === id)
       if (!t) return
-      await $.state.set(form, {
+      await $.state.set(formRef, {
         title: t.title,
         notes: t.notes ?? '',
         due: '',
         tags: t.tags.join(', '),
         importance: t.importance,
       })
-      await $.state.set(formMode, 'edit')
-      await $.state.set(formTargetId, id)
-      await $.state.set(formError, null)
-      await $.state.set(view, 'form')
+      await $.state.set(formModeRef, 'edit')
+      await $.state.set(formTargetIdRef, id)
+      await $.state.set(formErrorRef, null)
+      await $.state.set(viewRef, 'form')
       openFocused()
     }
     const setForm = (patch: Partial<TodoForm>) => {
@@ -332,13 +351,13 @@ export const register: Register = on => {
       const editing = mode === 'edit' && targetId != null ? list.find(t => t.id === targetId) : undefined
       const title = f.title.trim()
       if (title === '') {
-        await $.state.set(formError, '标题必填')
+        await $.state.set(formErrorRef, '标题必填')
         return
       }
       const due =
         f.due.trim() === '' && editing ? editing.due : parseDueInput(f.due, now)
       if (due == null) {
-        await $.state.set(formError, '截止时间无法解析（支持 HH:mm、M-D HH:mm、YYYY-M-D HH:mm，留空用默认）')
+        await $.state.set(formErrorRef, '截止时间无法解析（支持 HH:mm、M-D HH:mm、YYYY-M-D HH:mm，留空用默认）')
         return
       }
       const tags = f.tags
@@ -352,7 +371,7 @@ export const register: Register = on => {
         )
         await $.store.set('todos', next)
         $.ui.toast('已保存')
-        await $.state.set(formError, null)
+        await $.state.set(formErrorRef, null)
         await openDetail(editing.id)
       } else {
         const todo: Todo = {
@@ -369,7 +388,7 @@ export const register: Register = on => {
         const next = await update($, todos, ts => [todo, ...ts])
         await $.store.set('todos', next)
         $.ui.toast('已添加待办')
-        await $.state.set(formError, null)
+        await $.state.set(formErrorRef, null)
         await openDetail(todo.id)
       }
     }
@@ -380,7 +399,7 @@ export const register: Register = on => {
       if (t.tags.length > 0) lines.push(`标签：${t.tags.map(x => `#${x}`).join(' ')}`)
       const filled = await $.prompt.fill({ text: lines.join('\n'), mode: 'insert' })
       if (filled.isFilled) {
-        await $.state.set(applied, { id: t.id, title: t.title })
+        await $.state.set(appliedRef, { id: t.id, title: t.title })
         $.ui.toast('已应用到输入框；提交后可标记完成')
         void $.ui.close({ id: PANE })
       } else {
@@ -444,7 +463,7 @@ export const register: Register = on => {
             <Button
               key="form-cancel"
               label="取消"
-              onPress={() => void $.state.set(view, isEdit ? 'detail' : 'list')}
+              onPress={() => void $.state.set(viewRef, isEdit ? 'detail' : 'list')}
             />
           </Box>
         </Box>
@@ -543,12 +562,12 @@ export const register: Register = on => {
         ts.map(t => (t.id === asking.id ? { ...t, done: true, doneAt } : t)),
       )
       await $.store.set('todos', next)
-      await $.state.set(ask, null)
+      await $.state.set(askRef, null)
       $.ui.toast(`✓ 已完成：${asking.title}`)
       void $.ui.close({ id: ASK })
     }
     const skip = async () => {
-      await $.state.set(ask, null)
+      await $.state.set(askRef, null)
       void $.ui.close({ id: ASK })
     }
     return (
