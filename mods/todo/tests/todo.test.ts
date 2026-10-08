@@ -1,6 +1,16 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { defaultDue, formatDue, hydrateTodos, parseDueInput, sortTodos } from '../hooks/register'
+import {
+  buildExtractMessages,
+  defaultDue,
+  extractFields,
+  formatDue,
+  hasExtractionCues,
+  hydrateTodos,
+  parseDueInput,
+  parseExtractReply,
+  sortTodos,
+} from '../hooks/register'
 import type { Importance, Todo } from '../types'
 
 function makeTodo(id: string, importance: Importance, due: string, done = false): Todo {
@@ -124,6 +134,140 @@ describe('hydrateTodos 从 $.store 恢复', () => {
     await hydrateTodos(deps)
     expect(state.todos).toEqual([])
     expect(state.hydrated).toBe(true)
+  })
+})
+
+describe('hasExtractionCues 判断是否值得调模型提炼', () => {
+  test('纯标题不触发（中文/英文/短数字）', () => {
+    expect(hasExtractionCues('买牛奶')).toBe(false)
+    expect(hasExtractionCues('buy milk')).toBe(false)
+    expect(hasExtractionCues('review PR 1234')).toBe(false)
+    expect(hasExtractionCues('')).toBe(false)
+  })
+  test('时间线索触发', () => {
+    expect(hasExtractionCues('明天下午3点给妈妈买牛奶')).toBe(true)
+    expect(hasExtractionCues('10-9 交报告')).toBe(true)
+    expect(hasExtractionCues('周五前订机票')).toBe(true)
+    expect(hasExtractionCues('晚上11点睡觉提醒')).toBe(true)
+  })
+  test('重要度/标签/逗号（可能带备注）触发', () => {
+    expect(hasExtractionCues('买牛奶 重要')).toBe(true)
+    expect(hasExtractionCues('买牛奶 #生活')).toBe(true)
+    expect(hasExtractionCues('买牛奶，两盒')).toBe(true)
+  })
+  test('长文本（≥24 字符）视为含额外信息触发', () => {
+    expect(hasExtractionCues('把上个季度沉淀的会议纪要整理成文档再发给相关同学')).toBe(true)
+  })
+})
+
+describe('buildExtractMessages 提炼 prompt 构造', () => {
+  test('system 说明字段与枚举，prompt 带原文与当前时间', () => {
+    const now = new Date(2026, 9, 7, 10, 0)
+    const { system, prompt } = buildExtractMessages('明天下午3点买牛奶', now)
+    expect(system).toContain('urgent-important')
+    expect(system).toContain('important')
+    expect(system).toContain('general')
+    expect(system).toContain('JSON')
+    expect(prompt).toContain('明天下午3点买牛奶')
+    expect(prompt).toContain('2026-10-7')
+  })
+})
+
+describe('parseExtractReply 解析模型回复', () => {
+  const now = new Date(2026, 9, 7, 10, 0)
+  test('合法 JSON：全字段映射（due 为 M-D HH:mm）', () => {
+    const r = parseExtractReply(
+      '{"title":"买牛奶","notes":"给妈妈带","due":"10-9 15:00","tags":["生活","购物"],"importance":"urgent-important"}',
+      '原始输入',
+      now,
+    )
+    expect(r).toEqual({
+      title: '买牛奶',
+      notes: '给妈妈带',
+      due: new Date(2026, 9, 9, 15, 0).toISOString(),
+      tags: ['生活', '购物'],
+      importance: 'urgent-important',
+    })
+  })
+  test('JSON 包在散文/代码块里也能取出', () => {
+    const r = parseExtractReply(
+      '好的，提取结果：\n```json\n{"title":"交报告","due":"10-9"}\n```\n以上。',
+      '原始输入',
+      now,
+    )
+    expect(r?.title).toBe('交报告')
+    expect(r?.due).toBe(new Date(2026, 9, 9, 20, 0).toISOString())
+  })
+  test('due 为 ISO 字符串时直接采用', () => {
+    const r = parseExtractReply('{"title":"x","due":"2026-10-09T07:00:00.000Z"}', '原始输入', now)
+    expect(r?.due).toBe('2026-10-09T07:00:00.000Z')
+  })
+  test('字段缺失/非法逐项回退：title→原文、importance→general、due→默认、notes→null', () => {
+    const r = parseExtractReply('{"notes":"","due":"下周三","importance":"超紧急","tags":42}', '原始输入', now)
+    expect(r).toEqual({
+      title: '原始输入',
+      notes: null,
+      due: defaultDue(now),
+      tags: [],
+      importance: 'general',
+    })
+  })
+  test('tags 清洗：去 #、去重、滤空/超长/非字符串、最多 5 个', () => {
+    const r = parseExtractReply(
+      '{"title":"x","tags":["#生活","生活","",42,"超————————————————————长的标签","a","b","c","d","e"]}',
+      '原始输入',
+      now,
+    )
+    expect(r?.tags).toEqual(['生活', 'a', 'b', 'c', 'd'])
+  })
+  test('没有 JSON / JSON 非对象 / JSON.parse 失败 → null', () => {
+    expect(parseExtractReply('模型自由发挥没有结构', '原始输入', now)).toBe(null)
+    expect(parseExtractReply('[1,2,3]', '原始输入', now)).toBe(null)
+    expect(parseExtractReply('{"title":"x",}', '原始输入', now)).toBe(null)
+  })
+})
+
+describe('extractFields 端到端（注入 complete）', () => {
+  const now = new Date(2026, 9, 7, 10, 0)
+  test('有线索时调用 complete 并解析回复', async () => {
+    const calls: string[] = []
+    const r = await extractFields(
+      {
+        complete: async prompt => {
+          calls.push(prompt)
+          return '{"title":"买牛奶","notes":null,"due":"10-8 15:00","tags":["生活"],"importance":"important"}'
+        },
+      },
+      '明天下午3点买牛奶 #生活',
+      now,
+    )
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toContain('明天下午3点买牛奶')
+    expect(r).toEqual({
+      title: '买牛奶',
+      notes: null,
+      due: new Date(2026, 9, 8, 15, 0).toISOString(),
+      tags: ['生活'],
+      importance: 'important',
+    })
+  })
+  test('complete 失败（null）时返回 null，调用方降级', async () => {
+    const r = await extractFields({ complete: async () => null }, '明天买牛奶', now)
+    expect(r).toBe(null)
+  })
+  test('回复不可解析时返回 null', async () => {
+    const r = await extractFields({ complete: async () => '抱歉我不明白' }, '明天买牛奶', now)
+    expect(r).toBe(null)
+  })
+  test('纯标题不调 complete 直接返回 null', async () => {
+    const calls: string[] = []
+    const r = await extractFields(
+      { complete: async () => (calls.push('x'), '{}') },
+      '买牛奶',
+      now,
+    )
+    expect(calls).toEqual([])
+    expect(r).toBe(null)
   })
 })
 

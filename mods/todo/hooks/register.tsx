@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Importance, Todo, TodoForm } from '../types'
+import type { ExtractedFields, Importance, Todo, TodoForm } from '../types'
 
 const PANE = 'todo'
 const ASK = 'todo-ask'
@@ -115,6 +115,108 @@ export function parseDueInput(text: string, now: Date): string | null {
   return null
 }
 
+// ---------- /todo 自然语言提炼（纯函数，模型调用依赖注入便于测试） ----------
+
+/** 是否值得为这条输入调一次模型：时间/重要度/标签线索、逗号分号（可能带备注）、或长文本 */
+export function hasExtractionCues(text: string): boolean {
+  const t = text.trim()
+  if (t === '') return false
+  if (t.length >= 24) return true
+  return (
+    /#[^\s#]+/.test(t) ||
+    /(今天|明天|后天|大后天|下周|本周|这周|下?周[一二三四五六日天]|礼拜|上午|中午|下午|傍晚|晚上|凌晨|清晨|早上|\d{1,2}点|\d{1,2}:\d{2}|\d{1,2}月|\d{1,2}[日号]|\d{1,2}-\d{1,2})/.test(
+      t,
+    ) ||
+    /(重要|紧急|急|要紧|优先)/.test(t) ||
+    /[,，;；]/.test(t)
+  )
+}
+
+const EXTRACT_SYSTEM = `你在为一款待办应用做字段提炼。从用户输入中提取以下字段，只输出一个 JSON 对象，不要输出任何其他文字：
+{"title": string, "notes": string | null, "due": string, "tags": string[], "importance": "urgent-important" | "important" | "general"}
+规则：
+- title：待办事项本身，简洁名词短语，把时间/重要程度/标签信息从标题中移除
+- notes：补充说明或上下文，没有则 null
+- due：截止时间，格式 "YYYY-M-D HH:mm"（24 小时制，相对时间要换算成绝对时间）；输入没有时间信息则输出 ""
+- tags：标签数组，去掉 # 前缀；没有则 []
+- importance：重要且紧急→"urgent-important"；重要但不紧急→"important"；一般→"general"；没提则 "general"`
+
+export function buildExtractMessages(text: string, now: Date): { system: string; prompt: string } {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const weekday = '日一二三四五六'[now.getDay()]
+  const prompt =
+    `当前时间：${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}（周${weekday}）` +
+    `${pad(now.getHours())}:${pad(now.getMinutes())}\n用户输入：${text}`
+  return { system: EXTRACT_SYSTEM, prompt }
+}
+
+const ISO_DUE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/
+
+/** 解析模型回复：取首个 { 到末个 } 的 JSON；逐字段校验回退（title→原文、due→默认、importance→general）；整体失败返回 null */
+export function parseExtractReply(reply: string, fallbackTitle: string, now: Date): ExtractedFields | null {
+  const start = reply.indexOf('{')
+  const end = reply.lastIndexOf('}')
+  if (start < 0 || end <= start) return null
+  let obj: unknown
+  try {
+    obj = JSON.parse(reply.slice(start, end + 1))
+  } catch {
+    return null
+  }
+  if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) return null
+  const o = obj as Record<string, unknown>
+
+  let title = typeof o.title === 'string' ? o.title.trim() : ''
+  if (title === '') title = fallbackTitle.trim()
+  if (title === '') return null
+
+  const notes = typeof o.notes === 'string' && o.notes.trim() !== '' ? o.notes.trim() : null
+
+  let due = defaultDue(now)
+  if (typeof o.due === 'string') {
+    const t = o.due.trim()
+    if (ISO_DUE_RE.test(t)) {
+      const ms = Date.parse(t)
+      if (!Number.isNaN(ms)) due = new Date(ms).toISOString()
+    } else if (t !== '') {
+      due = parseDueInput(t, now) ?? defaultDue(now)
+    }
+  }
+
+  const tags = Array.isArray(o.tags)
+    ? [
+        ...new Set(
+          o.tags
+            .filter((x): x is string => typeof x === 'string')
+            .map(x => x.trim().replace(/^#/, ''))
+            .filter(x => x !== '' && x.length <= 24),
+        ),
+      ].slice(0, 5)
+    : []
+
+  const importance = IMPORTANCES.includes(o.importance as Importance) ? (o.importance as Importance) : 'general'
+
+  return { title: truncate(title, 120), notes, due, tags, importance }
+}
+
+export type ExtractDeps = {
+  /** 一次文本补全：成功返回回复文本，失败/超时/异常返回 null */
+  complete: (prompt: string, system: string) => Promise<string | null>
+}
+
+/** 有线索才调模型提炼；无线索、调用失败、回复不可解析都返回 null（调用方降级为现状行为） */
+export async function extractFields(
+  deps: ExtractDeps,
+  text: string,
+  now: Date,
+): Promise<ExtractedFields | null> {
+  if (!hasExtractionCues(text)) return null
+  const { system, prompt } = buildExtractMessages(text, now)
+  const reply = await deps.complete(prompt, system)
+  if (reply == null) return null
+  return parseExtractReply(reply, text, now)
+}
+
 /** 排序：重要程度分组（重要紧急 → 重要不紧急 → 一般），组内未完成在前，截止倒序（晚的在前） */
 export function sortTodos(list: readonly Todo[]): Todo[] {
   return [...list].sort((a, b) => {
@@ -191,7 +293,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'todo',
-      description: '待办看板：/todo 打开，/todo <标题> 快速添加',
+      description: '待办看板：/todo 打开，/todo <标题或一句话> 快速添加（自动提炼时间/重要程度/标签）',
     })
     await hydrate($)
     return next(e)
@@ -209,19 +311,57 @@ export const register: Register = on => {
     const args = e.args.trim()
     if (args !== '') {
       const now = new Date(await $.clock.now())
+      const extracted = await extractFields(
+        {
+          complete: async (prompt, system) => {
+            try {
+              const r = await $.model.complete({
+                model: 'haiku',
+                system,
+                prompt,
+                maxTokens: 300,
+                effort: 'low',
+                timeoutMs: 6000,
+              })
+              return r.isAnswered ? r.text : null
+            } catch {
+              return null
+            }
+          },
+        },
+        args,
+        now,
+      )
       const todo: Todo = {
         id: newId(),
-        title: truncate(args, 120),
-        notes: null,
-        due: defaultDue(now),
-        tags: [],
-        importance: 'general',
+        title: truncate(extracted?.title ?? args, 120),
+        notes: extracted?.notes ?? null,
+        due: extracted?.due ?? defaultDue(now),
+        tags: extracted?.tags ?? [],
+        importance: extracted?.importance ?? 'general',
         done: false,
         createdAt: now.toISOString(),
         doneAt: null,
       }
       const list = await update($, todos, ts => [todo, ...ts])
       await $.store.set('todos', list)
+      if (extracted != null) {
+        // 提炼过：打开预填的编辑表单人工确认（Esc 关闭即保留提炼结果，s 保存修正）
+        await $.state.set(formRef, {
+          title: todo.title,
+          notes: todo.notes ?? '',
+          due: '',
+          tags: todo.tags.join(', '),
+          importance: todo.importance,
+        })
+        await $.state.set(formModeRef, 'edit')
+        await $.state.set(formTargetIdRef, todo.id)
+        await $.state.set(formErrorRef, null)
+        await $.state.set(viewRef, 'form')
+        $.ui.toast(`已添加：${todo.title} · ⏰${formatDue(todo.due, now.getTime())} · ${IMPORTANCE_PLAIN[todo.importance]}`)
+        void $.ui.open({ id: PANE, title: '待办', focus: true })
+        return { text: `已添加待办：${todo.title}（截止 ${formatDue(todo.due, now.getTime())}）` }
+      }
       $.ui.toast(`已添加待办：${todo.title}`)
     }
     void $.ui.open({ id: PANE, title: '待办' })

@@ -25,6 +25,15 @@ export type TodoForm = {
 
 export type TodoApplied = { id: string; title: string } | null
 
+/** /todo 自然语言提炼结果（不进 $.state，仅在 command.run 内传递；due 已是合法 ISO，字段解析失败逐项回退默认值） */
+export type ExtractedFields = {
+  title: string
+  notes: string | null
+  due: string
+  tags: string[]
+  importance: Importance
+}
+
 declare module 'claude-code' {
   interface PluginState {
     todo: {
