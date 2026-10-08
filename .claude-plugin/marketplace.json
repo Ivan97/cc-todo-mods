@@ -1,6 +1,6 @@
 {
   "name": "cc-todo-mods",
-  "owner": { "name": "ivan97" },
+  "owner": { "name": "Ivan97" },
   "plugins": [
     {
       "name": "todo",

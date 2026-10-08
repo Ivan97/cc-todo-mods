@@ -18,24 +18,64 @@ Claude Code 的待办（todo）mod 合集。首个 mod：**todo** —— 一个�
 
 ## 安装
 
+三选一：
+
+### 方式一：本机常驻加载（个人使用，推荐）
+
+在 `~/.claude/settings.json` 的 `env` 块加入：
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_PLUGIN_DIRS": "/path/to/cc-todo-mods/mods/todo"
+  }
+}
+```
+
+每个 Claude Code 会话（任何项目目录）自动加载，`/clear` 后依然在；保存 mod 文件即热重载。改完重启 Claude Code 生效。
+
+### 方式二：从 GitHub 安装
+
 在 Claude Code 终端会话中输入：
 
 ```
-/plugin install todo --marketplace <your-github-name>/cc-todo-mods
+/plugin install todo --marketplace Ivan97/cc-todo-mods
 ```
 
-（把 `<your-github-name>` 换成本仓库所在的 GitHub 账号；先 `y` 添加 marketplace，回车选 user 作用域即可。）
+（先 `y` 添加 marketplace，回车选 user 作用域即可。）
 
-## 本地开发
+### 方式三：本地文件夹 marketplace（开发调试）
 
 ```bash
 # 从本仓库文件夹安装（文件夹型 marketplace，编辑后 /reload-plugins 即生效）
 claude plugin marketplace add /path/to/cc-todo-mods
 # 然后在 Claude Code 里: /plugin install todo --marketplace cc-todo-mods
+```
 
-# 校验 + 测试
+## 使用速查
+
+| 操作 | 入口 |
+|---|---|
+| 打开看板 | `/todo`，或摘要条按 `o` / 点「看板」 |
+| 快速添加 | `/todo 买牛奶`（默认截止：当天 20:00，18 点后次日 14:00） |
+| 新增（表单） | 看板内按 `n` 或点「新增」，可填标题/备注/截止/标签/重要程度 |
+| 保存表单 | `s`（或回车提交任一输入框） |
+| 查看详情 | 看板内点击待办标题 |
+| 编辑 / 应用 / 完成 / 删除 | 详情页 `e` / `a` / 完成 / 删除 |
+| 提交后确认完成 | 应用过的待办在提交提示词后弹确认框，`y` 标记完成 / `n` 跳过 |
+
+**数据与 /clear**：待办存在 Claude Code 插件 store（`~/.claude/plugins/store/`），跨会话持久；`/clear` 或切换会话后自动恢复（摘要条与看板重新出现）。
+
+## 本地开发
+
+```bash
+# 校验 + 测试（引擎级 UI 测试）
 claude plugin validate mods/todo
 claude plugin test mods/todo
+
+# 类型检查（首次运行前需已用任一方式加载过一次，引擎会在
+# mods/todo/.claude-plugin/types/ 铺好类型环境）
+cd mods/todo && bunx tsc -p . --noEmit
 ```
 
 ## License
