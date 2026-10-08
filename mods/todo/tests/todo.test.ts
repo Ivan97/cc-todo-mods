@@ -7,6 +7,16 @@ function makeTodo(id: string, importance: Importance, due: string, done = false)
   return { id, title: id, notes: null, due, tags: [], importance, done, createdAt: due, doneAt: null }
 }
 
+/** Pane 渲染 props 的合法最小值（RenderPropsOf['Pane'] 必填字段） */
+const PANE_PROPS = {
+  title: '待办',
+  isFocused: true,
+  bodyColumns: 80,
+  placement: 'inline',
+  scroll: { offset: 0, bodyRows: 24 },
+  view: {},
+} as const
+
 describe('defaultDue 默认截止时间', () => {
   test('18 点前默认当天 20:00', () => {
     const now = new Date(2026, 9, 7, 15, 30)
@@ -128,7 +138,7 @@ describe('看板 UI：新增表单', () => {
         surface,
         component: 'Pane',
         requestId: 'todo',
-        props: {},
+        props: PANE_PROPS,
       })
 
       expect(await ui.find({ key: 'list-new' })).toBeTruthy()
@@ -165,7 +175,7 @@ describe('看板 UI：从 $.store 恢复（/clear 后的路径）', () => {
         surface,
         component: 'Pane',
         requestId: 'todo',
-        props: {},
+        props: PANE_PROPS,
       })
 
       expect(await ui.find({ text: '恢复的待办' })).toBeTruthy()

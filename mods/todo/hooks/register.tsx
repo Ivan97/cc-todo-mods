@@ -160,9 +160,9 @@ function truncate(text: string, max: number): string {
 /** hydrateTodos 的最小依赖集，便于单测 */
 export type HydrateDeps = {
   wasHydrated(): Promise<boolean>
-  markHydrated(): Promise<void>
+  markHydrated(): Promise<unknown>
   readStoredTodos(): Promise<unknown>
-  writeTodos(list: Todo[]): Promise<void>
+  writeTodos(list: Todo[]): Promise<unknown>
 }
 
 /**
@@ -281,7 +281,11 @@ export const register: Register = on => {
 
   // ---------- 侧边栏看板 ----------
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Button, Input, Select, Text } = $.ui.resolve(e)
+    // mobile 元素表暂无 Input/Select，条件解构并在表单视图降级
+    const elements = $.ui.resolve(e)
+    const { Box, Button, Text } = elements
+    const Input = 'Input' in elements ? elements.Input : undefined
+    const Select = 'Select' in elements ? elements.Select : undefined
     const nowMs = await $.clock.now()
     const now = new Date(nowMs)
     const list = (await read($, todos)) ?? []
@@ -409,6 +413,13 @@ export const register: Register = on => {
 
     // ----- form view -----
     if (v === 'form') {
+      if (Input === undefined || Select === undefined) {
+        return (
+          <Box flexDirection="column">
+            <Text dimColor>当前界面暂不支持输入字段（mobile），请在终端或桌面端填写表单。</Text>
+          </Box>
+        )
+      }
       const isEdit = formModeValue === 'edit' && target != null
       return (
         <Box flexDirection="column" gap={1}>
