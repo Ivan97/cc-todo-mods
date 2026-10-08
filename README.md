@@ -20,7 +20,17 @@ Claude Code 的待办（todo）mod 合集。首个 mod：**todo** —— 一个�
 
 三选一：
 
-### 方式一：本机常驻加载（个人使用，推荐）
+### 方式一：从 GitHub 安装（推荐）
+
+在 Claude Code 终端会话中输入：
+
+```
+/plugin install todo --marketplace Ivan97/cc-todo-mods
+```
+
+（先 `y` 添加 marketplace，回车选 user 作用域即可。）一条命令完成，不依赖本机路径；后续用 `/plugin` 菜单检查更新。
+
+### 方式二：本机常驻加载（自己在改这个仓库时）
 
 在 `~/.claude/settings.json` 的 `env` 块加入：
 
@@ -32,17 +42,7 @@ Claude Code 的待办（todo）mod 合集。首个 mod：**todo** —— 一个�
 }
 ```
 
-每个 Claude Code 会话（任何项目目录）自动加载，`/clear` 后依然在；保存 mod 文件即热重载。改完重启 Claude Code 生效。
-
-### 方式二：从 GitHub 安装
-
-在 Claude Code 终端会话中输入：
-
-```
-/plugin install todo --marketplace Ivan97/cc-todo-mods
-```
-
-（先 `y` 添加 marketplace，回车选 user 作用域即可。）
+每个 Claude Code 会话（任何项目目录）自动加载，`/clear` 后依然在；保存 mod 文件即热重载，适合开发迭代。改完重启 Claude Code 生效。注意：与方式一不要同时用，否则同一 mod 会被加载两份。
 
 ### 方式三：本地文件夹 marketplace（开发调试）
 
